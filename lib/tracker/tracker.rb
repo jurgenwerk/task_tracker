@@ -47,8 +47,14 @@ class Tracker
     }
 
     resp = make_request(:end, params)
-    reset! if resp.code.to_i == 200
-    resp
+    response_code = resp.code.to_i
+
+    if response_code == 200
+      reset!
+    else
+      errorMsg = JSON.parse(resp.body)["error"]
+      TaskTracker.logger.error("Error while tracking task end (#{resp.message}): #{errorMsg}")
+    end
   end
 
   private
@@ -70,7 +76,7 @@ class Tracker
     https.request(req, params.to_json)
   rescue Timeout::Error, Errno::EINVAL, Errno::ECONNRESET, EOFError,
     Net::HTTPBadResponse, Net::HTTPHeaderSyntaxError, Net::ProtocolError => e
-    TaskTracker.logger.error("Failed HTTP request: #{e.message}. Retrying...")
+    TaskTracker.logger.error("Failed HTTP request: #{e.message}.")
   end
 
   def reset!
