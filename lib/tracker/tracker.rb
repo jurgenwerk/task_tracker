@@ -10,7 +10,7 @@ class Tracker
   TASK_START_URL = TRACK_URL + "/task_instances/start"
   TASK_END_URL = TRACK_URL + "/task_instances/end"
 
-  def initialize(task_name, config: {})
+  def initialize(task_name, config={})
     set_config(config)
     @task_name = task_name
   end
@@ -19,6 +19,7 @@ class Tracker
     task_tracker = self.new(task_name, config)
     task_tracker.task_start
     yield
+  ensure # End task even when the block throws
     task_tracker.task_end
   end
 
@@ -31,7 +32,17 @@ class Tracker
       task_instance_uuid: @task_instance_uuid
     }
 
-    make_request(:start, params)
+    resp = make_request(:start, params)
+    response_code = resp.code.to_i
+
+    if response_code == 200
+      TaskTracker.logger.info("Task #{@task_name}(#{@task_instance_uuid}) started.")
+    else
+      errorMsg = JSON.parse(resp.body)["error"] if resp.content_type.downcase.include?("json")
+      TaskTracker.logger.error("Error while tracking task start (#{resp.message}): #{errorMsg}")
+    end
+  rescue Exception => ex
+    TaskTracker.logger.error(ex.message)
   end
 
   def task_end
@@ -50,11 +61,15 @@ class Tracker
     response_code = resp.code.to_i
 
     if response_code == 200
+      TaskTracker.logger.info("Task #{@task_name}(#{@task_instance_uuid}) ended.")
       reset!
     else
-      errorMsg = JSON.parse(resp.body)["error"]
+      errorMsg = JSON.parse(resp.body)["error"] if resp.content_type.downcase.include?("json")
       TaskTracker.logger.error("Error while tracking task end (#{resp.message}): #{errorMsg}")
     end
+
+  rescue Exception => ex
+    TaskTracker.logger.error(ex.message)
   end
 
   private
@@ -73,10 +88,11 @@ class Tracker
 
     params = params.merge(monitor_api_key: @monitor_api_key)
     req = Net::HTTP::Post.new(uri.path, 'Content-Type' => 'application/json; charset=UTF-8')
-    https.request(req, params.to_json)
+    response = https.request(req, params.to_json)
   rescue Timeout::Error, Errno::EINVAL, Errno::ECONNRESET, EOFError,
     Net::HTTPBadResponse, Net::HTTPHeaderSyntaxError, Net::ProtocolError => e
     TaskTracker.logger.error("Failed HTTP request: #{e.message}.")
+    response
   end
 
   def reset!
@@ -94,8 +110,9 @@ class Tracker
       end
 
     unless @monitor_api_key
-      TaskTracker.logger.error
+      TaskTracker.logger.error(
         "No MONITOR_API_KEY was found in ENV or in config passed into `Tracker.new`"
+      )
     end
   end
 end
